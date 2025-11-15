@@ -65,33 +65,6 @@ Hệ thống v3.0 (Hybrid) này hoạt động theo 3 luồng chính:
 2.  Bot query (truy vấn) **PostgreSQL** (bảng `message_logs`) để tìm các `user_id` không hoạt động (ví dụ: 3 ngày).
 3.  Bot gửi tin nhắn nhắc nhở cho những user đó.
 
-### Sơ đồ Trực quan (GitHub Mermaid)
-
-```mermaid
-graph TD
-    A(User) -- 1. Gửi tin nhắn --> T(Telegram API)
-    T -- 2. Đẩy Update --> R[Bot Service (Render)]
-
-    subgraph "Hybrid Logic (handle_message)"
-        R -- 3. [Ưu tiên 1] Query Keyword --> DB(PostgreSQL DB)
-        DB -- 4a. Tìm thấy (Gửi v2.0) --> R_OUT
-        DB -- 4b. Không tìm thấy --> G(Google Gemini API)
-        G -- 5a. Trả lời (Gửi v3.0) --> R_OUT
-        G -- 5b. Lỗi (4xx) --> R_v1(Logic v1.0 Fallback)
-        R_v1 -- 6. Gửi v1.0 --> R_OUT
-    end
-
-    R_OUT -- 7. Ghi Log (message_logs) --> DB
-    R_OUT -- 8. Gửi Phản hồi + Nút bấm --> T
-    T -- 9. Hiển thị cho --> A
-
-    subgraph "Feedback Loop (button_click)"
-        A -- 10. Nhấn nút 👍/👎 --> T
-        T -- 11. Đẩy Callback --> R
-        R -- 12. Ghi Log (feedback_logs) --> DB
-        R -- 13. [If 'sugg'] Cập nhật Score (content_db) --> DB
-    end
-```
 
 ---
 
@@ -109,14 +82,14 @@ Dự án này đọc tất cả các "bí mật" (API Keys) từ file `.env`. H�
 
 ```ini
 # Lấy từ @BotFather trên Telegram
-TELEGRAM_BOT_TOKEN=TOKEN_TELEGRAM_CUA_BAN
+TELEGRAM_BOT_TOKEN=8541077394:AAEfHsSIBRwa8eYsHS21IStnjwhxsmsfzwk
 
 # Lấy từ Google AI Studio ([https://aistudio.google.com/](https://aistudio.google.com/))
-GEMINI_API_KEY=KEY_GEMINI_CUA_BAN
+GEMINI_API_KEY=AIzaSyB19NjJjlHZm8kQWzM4VC1nKLFe9IxZHqU
 
 # Dùng "Internal Database URL" nếu deploy trên Render
 # Dùng "External Database URL" nếu chạy script migrate
-DATABASE_URL=postgres://user:pass@host/dbname
+DATABASE_URL=postgresql://aimentor_db_user:NinCDZ7ZQGlxELhs5NHpNrDzzF86uY69@dpg-d4c1s9ili9vc73bnhf9g-a/aimentor_db
 ```
 
 **3. Khởi chạy Dịch vụ:**
