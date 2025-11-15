@@ -32,6 +32,69 @@ Hệ thống được xây dựng theo kiến trúc "Hybrid", ưu tiên nội du
 
 ---
 
+## 📊 Luồng Hoạt động (Data Flow)
+
+Hệ thống v3.0 (Hybrid) này hoạt động theo 3 luồng chính:
+
+### Luồng 1: Xử lý Tin nhắn Mới (Hybrid Logic)
+
+Đây là luồng "ưu tiên" khi bot nhận được tin nhắn:
+
+1.  **User** gửi tin nhắn (ví dụ: "lỗi python").
+2.  **Bot Service** (Render) nhận tin nhắn.
+3.  **[Ưu tiên 1]** Bot tìm trong **PostgreSQL** (bảng `content_db`).
+    * **Nếu tìm thấy:** Bot gửi gợi ý (link/text) từ DB. (Nhanh, Rẻ, Đã kiểm duyệt).
+    * **Nếu không tìm thấy:** Chuyển sang Ưu tiên 2.
+4.  **[Ưu tiên 2]** Bot gọi API của **Google Gemini** (v3.0).
+    * **Nếu thành công:** Bot gửi câu trả lời thông minh từ Gemini.
+    * **Nếu Gemini lỗi (429, 404...):** Chuyển sang Ưu tiên 3.
+5.  **[Ưu tiên 3]** Bot dùng logic `if-else` (v1.0) cũ làm dự phòng (fallback).
+6.  Cuối cùng, bot ghi log tin nhắn vào `message_logs` (PostgreSQL) và gửi câu trả lời (kèm nút 👍/👎) cho User.
+
+### Luồng 2: Xử lý Feedback (Vòng lặp Học)
+
+1.  **User** nhấn nút "👍 Hữu ích" (hoặc "👎").
+2.  **Bot Service** nhận "CallbackQuery".
+3.  Bot ghi log (ví dụ: "good", "Sugg_002") vào bảng `feedback_logs` (PostgreSQL).
+4.  **Nếu** feedback này là cho một gợi ý (`sugg_id` tồn tại), bot sẽ `UPDATE` bảng `content_db` để cộng/trừ `rating_score` của gợi ý đó.
+5.  Bot sửa tin nhắn, xóa nút bấm.
+
+### Luồng 3: Lập lịch (Scheduler)
+
+1.  **Job Queue** (Render) tự động kích hoạt hàm `smart_scheduler_job` mỗi 24 giờ.
+2.  Bot query (truy vấn) **PostgreSQL** (bảng `message_logs`) để tìm các `user_id` không hoạt động (ví dụ: 3 ngày).
+3.  Bot gửi tin nhắn nhắc nhở cho những user đó.
+
+### Sơ đồ Trực quan (GitHub Mermaid)
+
+```mermaid
+graph TD
+    A(User) -- 1. Gửi tin nhắn --> T(Telegram API)
+    T -- 2. Đẩy Update --> R[Bot Service (Render)]
+
+    subgraph "Hybrid Logic (handle_message)"
+        R -- 3. [Ưu tiên 1] Query Keyword --> DB(PostgreSQL DB)
+        DB -- 4a. Tìm thấy (Gửi v2.0) --> R_OUT
+        DB -- 4b. Không tìm thấy --> G(Google Gemini API)
+        G -- 5a. Trả lời (Gửi v3.0) --> R_OUT
+        G -- 5b. Lỗi (4xx) --> R_v1(Logic v1.0 Fallback)
+        R_v1 -- 6. Gửi v1.0 --> R_OUT
+    end
+
+    R_OUT -- 7. Ghi Log (message_logs) --> DB
+    R_OUT -- 8. Gửi Phản hồi + Nút bấm --> T
+    T -- 9. Hiển thị cho --> A
+
+    subgraph "Feedback Loop (button_click)"
+        A -- 10. Nhấn nút 👍/👎 --> T
+        T -- 11. Đẩy Callback --> R
+        R -- 12. Ghi Log (feedback_logs) --> DB
+        R -- 13. [If 'sugg'] Cập nhật Score (content_db) --> DB
+    end
+```
+
+---
+
 ## 🐳 Cách chạy Dự án (Local)
 
 Dự án này được thiết kế để chạy với Docker Compose.
@@ -94,8 +157,8 @@ Dự án này được tối ưu để chạy trên Gói Miễn phí của Rende
     * Tạo một "New Background Worker" trên Render (Free tier).
     * Kết nối nó với repo GitHub này.
     * Trong tab "Environment", thêm 3 biến môi trường:
-        * `TELEGRAM_BOT_TOKEN=8541077394:AAEfHsSIBRwa8eYsHS21IStnjwhxsmsfzwk`
-        * `GEMINI_API_KEY=AIzaSyB19NjJjlHZm8kQWzM4VC1nKLFe9IxZHqU`
-        * `DATABASE_URL=postgresql://aimentor_db_user:NinCDZ7ZQGlxELhs5NHpNrDzzF86uY69@dpg-d4c1s9ili9vc73bnhf9g-a/aimentor_db` (Dán giá trị "Internal Database URL" đã copy ở Bước 1).
-    * **Start Command:** `python bot.py`
+        * `TELEGRAM_BOT_TOKEN`
+        * `GEMINI_API_KEY`
+        * `DATABASE_URL` (Dán giá trị "Internal Database URL" đã copy ở Bước 1).
+    * **Start Command:** Để trống (sẽ tự động dùng `CMD` từ `Dockerfile`).
     * Nhấn "Deploy".
