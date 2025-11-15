@@ -1,0 +1,6 @@
+python-telegram-bot[job-queue]
+# Thêm dòng này (ví dụ cho Gemini)
+google-generativeai
+httpx # (Đã có từ Day 13 trước)
+SQLAlchemy
+psycopg2-binary

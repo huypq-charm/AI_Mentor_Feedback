@@ -1,0 +1,16 @@
+# File bí mật - KHÔNG BAO GIỜ push lên GitHub
+.env
+token.json
+client_secret.json
+
+# Database (sẽ dùng Postgres của Render)
+aimentor.db
+
+# File rác của Python
+__pycache__/
+*.pyc
+
+# File rác của hệ điều hành / IDE
+.DS_Store
+.idea/
+.vscode/

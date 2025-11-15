@@ -1,0 +1,20 @@
+version: '3.8' # Phiên bản docker-compose
+
+services:
+  # Định nghĩa 1 dịch vụ (service) tên là "bot"
+  bot:
+    # Tự động build từ Dockerfile trong thư mục hiện tại
+    build: .
+
+    # Tự động khởi động lại nếu bị sập
+    restart: always
+
+    # Đọc file .env và nạp các biến vào môi trường container
+    env_file:
+      - .env
+
+    # RẤT QUAN TRỌNG: Kết nối (mount) file database
+    volumes:
+      # Kết nối file 'aimentor.db' bên ngoài
+      # vào file '/app/aimentor.db' bên trong container
+      - ./aimentor.db:/app/aimentor.db
