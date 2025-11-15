@@ -94,8 +94,8 @@ Dự án này được tối ưu để chạy trên Gói Miễn phí của Rende
     * Tạo một "New Background Worker" trên Render (Free tier).
     * Kết nối nó với repo GitHub này.
     * Trong tab "Environment", thêm 3 biến môi trường:
-        * `TELEGRAM_BOT_TOKEN`
-        * `GEMINI_API_KEY`
-        * `DATABASE_URL` (Dán giá trị "Internal Database URL" đã copy ở Bước 1).
+        * `TELEGRAM_BOT_TOKEN=8541077394:AAEfHsSIBRwa8eYsHS21IStnjwhxsmsfzwk`
+        * `GEMINI_API_KEY=AIzaSyB19NjJjlHZm8kQWzM4VC1nKLFe9IxZHqU`
+        * `DATABASE_URL=postgresql://aimentor_db_user:NinCDZ7ZQGlxELhs5NHpNrDzzF86uY69@dpg-d4c1s9ili9vc73bnhf9g-a/aimentor_db` (Dán giá trị "Internal Database URL" đã copy ở Bước 1).
     * **Start Command:** `python bot.py`
     * Nhấn "Deploy".
