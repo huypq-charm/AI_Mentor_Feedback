@@ -16,7 +16,7 @@ import google.generativeai as genai  # <-- MỚI (Day 13)
 # --- CẤU HÌNH (NÂNG CẤP Day 13) ---
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")  # <-- MỚI (Day 13)
-DATABASE_URL = os.getenv("postgresql://aimentor_db_user:NinCDZ7ZQGlxELhs5NHpNrDzzF86uY69@dpg-d4c1s9ili9vc73bnhf9g-a/aimentor_db") # Đọc URL database từ môi trường
+DATABASE_URL = os.getenv("DATABASE_URL") # Đọc URL database từ môi trường
 
 # --- THIẾT LẬP LOGGING ---
 logging.basicConfig(
