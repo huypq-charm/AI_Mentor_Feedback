@@ -62,7 +62,7 @@ try:
     content_records = db.get_all_content()
     logger.info(f"Đã tải {len(content_records)} gợi ý từ cache SQLite (v2.0).")
 except Exception as e:
-    logger.error(f"LỖI KHỞI ĐỘNG: Không thể kết nối DB {DB_FILE}: {e}", exc_info=True)
+    logger.error(f"LỖI KHỞI ĐỘNG: Không thể kết nối DB {DATABASE_URL}: {e}", exc_info=True)
     exit()
 
 if not DATABASE_URL:
