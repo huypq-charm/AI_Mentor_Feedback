@@ -1,9 +1,9 @@
-# FILE BOT CHÍNH (CHUẨN DAY 20 - Retry System & Better AI)
+# FILE BOT CHÍNH (CHUẨN DAY 21 - Multi-Source Scraper)
 
 import sqlite3
 from db_collector import CollectorV2
-from scrapers import scrape_python_news
-# [DAY 20] Import Retry Manager
+# [DAY 21] Import hàm cào đa nguồn
+from scrapers import scrape_all_sources
 from retry_manager import RetryManager
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
@@ -22,7 +22,7 @@ TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 DATABASE_URL = os.getenv("DATABASE_URL")
 
-# Thay bằng ID Telegram thật của bạn
+# ⚠️ THAY BẰNG ID TELEGRAM CỦA BẠN
 ADMIN_IDS = [5929406140]
 
 # --- CẤU HÌNH LOGGING ---
@@ -31,9 +31,11 @@ logging.basicConfig(
     level=logging.INFO,
     datefmt="%Y-%m-%d %H:%M:%S"
 )
+# Tắt bớt log rác
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("apscheduler").setLevel(logging.WARNING)
 logging.getLogger("googleapiclient").setLevel(logging.WARNING)
+logging.getLogger("urllib3").setLevel(logging.WARNING)
 
 logger = logging.getLogger("AI_Mentor_Bot")
 
@@ -43,12 +45,11 @@ job_locks = {
     "scraper": False
 }
 
-# --- KHỞI TẠO CÁC MODULE ---
+# --- KHỞI TẠO ---
 if not TELEGRAM_BOT_TOKEN or not GEMINI_API_KEY:
     logger.error("Lỗi: Thiếu API Key.")
     exit()
 
-# Xử lý URL Database
 if DATABASE_URL and DATABASE_URL.startswith("postgres://"):
     DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
 
@@ -57,50 +58,43 @@ try:
     db = CollectorV2(DATABASE_URL)
     db.setup_database()
     content_records = db.get_all_content()
-    logger.info(f"DB: Đã tải {len(content_records)} gợi ý.")
+    logger.info(f"DB: Đã tải {len(content_records)} gợi ý từ cache.")
 except Exception as e:
     logger.error(f"LỖI KHỞI ĐỘNG DB: {e}", exc_info=True)
     exit()
 
-# 2. [DAY 20] Retry Manager
+# 2. Retry Manager
 retry_mgr = RetryManager()
 
-# 3. [DAY 20] Cấu hình Gemini (Prompt Tốt hơn)
+# 3. Gemini AI
 try:
     genai.configure(api_key=GEMINI_API_KEY)
-
-    # System Prompt nâng cao
     system_prompt = """
-    Bạn là AI Mentor, một trợ lý học tập nhiệt tình và chuyên nghiệp.
-    Quy tắc:
-    1. Luôn trả lời bằng tiếng Việt.
-    2. Nếu câu hỏi về lập trình, hãy đưa ra ví dụ code ngắn gọn (trong block code).
-    3. Văn phong: Thân thiện, khuyến khích (dùng emoji 🚀, 💡).
-    4. Nếu người dùng hỏi tin tức, hãy tóm tắt ý chính.
-    5. Không chào hỏi lại nếu không cần thiết, đi thẳng vào vấn đề.
+    Bạn là AI Mentor, trợ lý học tập chuyên nghiệp.
+    1. Trả lời bằng tiếng Việt.
+    2. Giải thích ngắn gọn, dễ hiểu.
+    3. Nếu có code, hãy để trong block code.
+    4. Thân thiện và khuyến khích người học.
     """
-
     model_v3 = genai.GenerativeModel(
         model_name="models/gemini-flash-latest",
         system_instruction=system_prompt
     )
 except Exception:
     model_v3 = None
-    logger.warning("Gemini Error: Chuyển sang chế độ Fallback.")
+    logger.warning("Gemini Error: Fallback Mode.")
 
 
 # ==============================================================================
-# CÁC HÀM HỖ TRỢ (HELPER)
+# HELPER FUNCTIONS
 # ==============================================================================
 
-# [DAY 20] Hàm gửi tin nhắn an toàn (Wrapper)
 async def send_message_safe(bot, chat_id, text, parse_mode=None):
     try:
         await bot.send_message(chat_id=chat_id, text=text, parse_mode=parse_mode)
         return True
     except Exception as e:
         logger.error(f"Gửi tin thất bại cho {chat_id}: {e}")
-        # Lưu vào Retry Queue để xử lý sau
         retry_mgr.add_message(chat_id, text, reason=e)
         return False
 
@@ -138,67 +132,67 @@ async def get_gemini_feedback_v3(message_text: str, history: list) -> str:
 # JOBS SCHEDULER
 # ==============================================================================
 
-# 1. Nhắc nhở học tập (Dùng send_message_safe)
+# 1. Nhắc nhở học tập
 async def smart_scheduler_job(context: ContextTypes.DEFAULT_TYPE):
     if job_locks["scheduler"]: return
     job_locks["scheduler"] = True
-
     try:
         current_hour = datetime.datetime.now().hour
         if current_hour < 8 or current_hour > 21: return
 
         logger.info("SCHEDULER: Quét người dùng...")
         inactive_users = db.get_inactive_users(days_inactive=3)
-
         if inactive_users:
             count = 0
-            msg = "Chào bạn, đã lâu không thấy bạn tương tác. Bạn có muốn tiếp tục học không? 🚀"
+            msg = "Chào bạn, đã lâu không thấy bạn tương tác. Tiếp tục học nhé! 🚀"
             for user in inactive_users:
-                # [DAY 20] Dùng hàm gửi an toàn
-                success = await send_message_safe(context.bot, user['user_id'], msg)
-                if success: count += 1
-            logger.info(f"SCHEDULER: Đã gửi nhắc nhở cho {count} người.")
-
+                if await send_message_safe(context.bot, user['user_id'], msg):
+                    count += 1
+            logger.info(f"SCHEDULER: Đã nhắc nhở {count} người.")
     except Exception as e:
         logger.error(f"Lỗi Scheduler: {e}")
     finally:
         job_locks["scheduler"] = False
 
 
-# 2. [DAY 20] Retry Job (Xử lý tin nhắn lỗi)
+# 2. Retry Job
 async def retry_job(context: ContextTypes.DEFAULT_TYPE):
-    # Lấy 5 tin nhắn lỗi ra để thử lại
     messages = retry_mgr.pop_batch(limit=5)
-    if not messages: return
-
-    logger.info(f"RETRY: Đang thử gửi lại {len(messages)} tin nhắn...")
-    for item in messages:
-        chat_id = item['chat_id']
-        text = item['text']
-        try:
-            # Thử gửi lại lần nữa (không dùng wrapper để tránh lặp vô hạn trong queue này)
-            await context.bot.send_message(chat_id=chat_id, text=text, parse_mode="Markdown")
-            logger.info(f"RETRY: Thành công cho {chat_id}")
-        except Exception as e:
-            logger.error(f"RETRY: Vẫn thất bại cho {chat_id}. Bỏ qua. Lỗi: {e}")
+    if messages:
+        logger.info(f"RETRY: Đang thử gửi lại {len(messages)} tin nhắn...")
+        for item in messages:
+            try:
+                await context.bot.send_message(chat_id=item['chat_id'], text=item['text'], parse_mode="Markdown")
+                logger.info(f"RETRY: Thành công cho {item['chat_id']}")
+            except Exception as e:
+                logger.error(f"RETRY Fail: {e}")
 
 
-# 3. Auto Feed Scraper
+# 3. [DAY 21] Auto Feed Scraper (ĐA NGUỒN)
 async def auto_feed_job(context: ContextTypes.DEFAULT_TYPE):
-    if job_locks["scraper"]: return
+    if job_locks["scraper"]:
+        logger.warning("SCRAPER: Job trước chưa xong. Bỏ qua.")
+        return
+
     job_locks["scraper"] = True
     try:
-        logger.info("SCRAPER: Bắt đầu cào dữ liệu...")
-        items = scrape_python_news()
+        logger.info("SCRAPER: Bắt đầu quét dữ liệu đa nguồn (10 Web)...")
+
+        # Gọi hàm cào đa nguồn từ scrapers.py
+        items = scrape_all_sources()
+
         if items:
             count = db.import_content_batch(items)
-            msg = f"Đã cào được {len(items)} bài, thêm mới {count} bài."
+            msg = f"📥 Đã quét xong. Tìm thấy {len(items)} bài, lưu mới {count} bài."
             logger.info(msg)
             db.log_health("Scraper", "OK", msg)
+
+            # Reload cache
             global content_records
             content_records = db.get_all_content()
         else:
-            db.log_health("Scraper", "WARNING", "Không cào được bài nào.")
+            db.log_health("Scraper", "WARNING", "Không tìm thấy dữ liệu nào.")
+
     except Exception as e:
         logger.error(f"Lỗi Scraper: {e}")
         db.log_health("Scraper", "ERROR", str(e))
@@ -218,7 +212,7 @@ async def daily_report_job(context: ContextTypes.DEFAULT_TYPE):
     total_content = len(content_records) if 'content_records' in globals() else 0
 
     report = f"📊 **BÁO CÁO NGÀY** ({datetime.datetime.now().strftime('%d/%m')})\n"
-    report += f"- Tổng bài học: {total_content}\n"
+    report += f"- Tổng bài học (DB): {total_content}\n"
     if not errors:
         report += "✅ Hệ thống ổn định."
     else:
@@ -257,7 +251,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     callback_id = ""
 
     if sugg_id:
-        final_feedback = f"Gợi ý:\n\n💡 **{sugg_text}**\n{sugg_link}"
+        final_feedback = f"Gợi ý từ DB:\n\n💡 **{sugg_text}**\n{sugg_link}"
         callback_type = "sugg"
         callback_id = sugg_id
         logger.info(f"-> DB Suggestion: {sugg_id}")
@@ -275,15 +269,13 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     try:
         db.log_message(user_id, username, message_text, final_feedback)
-    except Exception as e:
-        logger.error(f"DB Log Error: {e}")
+    except Exception:
+        pass
 
     keyboard = [[
         InlineKeyboardButton("👍 Hữu ích", callback_data=f"fb_{callback_type}_{callback_id}_good"),
         InlineKeyboardButton("👎 Không hữu ích", callback_data=f"fb_{callback_type}_{callback_id}_bad"),
     ]]
-
-    # Gửi tin trực tiếp (không qua Retry cho tương tác realtime để user không phải đợi lâu nếu lỗi)
     await message.reply_text(final_feedback, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
 
 
@@ -314,27 +306,31 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Chào bạn! AI Mentor v3.2 (Retry System) sẵn sàng!")
+    await update.message.reply_text("Chào bạn! AI Mentor v3.3 (Multi-Source) sẵn sàng!")
 
 
 def main():
-    logger.info("--- KHỞI ĐỘNG AI MENTOR BOT v3.2 (Day 20) ---")
+    logger.info("--- KHỞI ĐỘNG AI MENTOR BOT v3.3 (Day 21) ---")
     application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
 
     jq = application.job_queue
-    # Đăng ký các Jobs
+    # Đặt lịch (Giây)
+    # 1. Nhắc nhở: 24h
     jq.run_repeating(smart_scheduler_job, interval=86400, first=10)
-    jq.run_repeating(retry_job, interval=300, first=15)  # [DAY 20] Retry Job (5 phút/lần)
+    # 2. Retry: 5 phút
+    jq.run_repeating(retry_job, interval=300, first=15)
+    # 3. Alive Check: 1h
     jq.run_repeating(alive_check_job, interval=3600, first=20)
+    # 4. [DAY 21] Auto Feed (6h) - first=30s để test ngay khi khởi động
     jq.run_repeating(auto_feed_job, interval=21600, first=30)
+    # 5. Báo cáo: 24h
     jq.run_repeating(daily_report_job, interval=86400, first=60)
+    # 6. Dọn dẹp: 1 tuần
     jq.run_repeating(maintenance_job, interval=604800, first=120)
 
     application.add_handler(CommandHandler("start", start_command))
     application.add_handler(CallbackQueryHandler(button_click, pattern="^fb_"))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-    application.add_handler(
-        MessageHandler(filters.Sticker.ALL | filters.PHOTO, lambda u, c: u.message.reply_text("Chỉ nhận text!")))
 
     logger.info("Bot đang chạy...")
     application.run_polling()
