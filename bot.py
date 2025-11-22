@@ -18,6 +18,9 @@ TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")  # <-- MỚI (Day 13)
 DATABASE_URL = os.getenv("DATABASE_URL") # Đọc URL database từ môi trường
 
+if DATABASE_URL and DATABASE_URL.startswith("postgres://"):
+    DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
+
 # --- THIẾT LẬP LOGGING ---
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
