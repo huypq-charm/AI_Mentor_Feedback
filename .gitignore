@@ -1,16 +1,19 @@
-# File bí mật - KHÔNG BAO GIỜ push lên GitHub
+# --- File cấu hình & Bí mật ---
 .env
 token.json
 client_secret.json
 
-# Database (sẽ dùng Postgres của Render)
+# --- Database & Logs ---
 aimentor.db
+*.log
+LogRetry.json
+system_health.csv
 
-# File rác của Python
+# --- Python Cache ---
 __pycache__/
 *.pyc
 
-# File rác của hệ điều hành / IDE
+# --- IDE & System ---
 .DS_Store
 .idea/
 .vscode/
