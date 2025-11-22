@@ -1,26 +1,26 @@
-# db_collector.py (PHIÊN BẢN POSTGRESQL + SQLALCHEMY)
+# db_collector.py (PHIÊN BẢN ĐÃ SỬA LỖI BIGINT)
 
 import datetime
 import logging
-from sqlalchemy import create_engine, Column, String, Integer, Text, DateTime, func
+# 1. THÊM BigInteger VÀO IMPORT 👇
+from sqlalchemy import create_engine, Column, String, Integer, BigInteger, Text, DateTime, func
 from sqlalchemy.orm import sessionmaker, declarative_base
 from sqlalchemy.exc import SQLAlchemyError
 
 logger = logging.getLogger(__name__)
 
 # --- KHỞI TẠO SQLALCHEMY ---
-# 1. Base class cho tất cả các models (bảng)
 Base = declarative_base()
 
 
-# --- 2. ĐỊNH NGHĨA CÁC BẢNG DƯỚI DẠNG CLASS ---
-# Các class này sẽ tự động tạo bảng nếu chưa tồn tại
+# --- 2. ĐỊNH NGHĨA CÁC BẢNG (MODELS) ---
 
 class MessageLog(Base):
     __tablename__ = "message_logs"
     id = Column(Integer, primary_key=True, autoincrement=True)
     timestamp = Column(DateTime, default=datetime.datetime.now)
-    user_id = Column(Integer, nullable=False, index=True)
+    # 👇 SỬA Ở ĐÂY: Dùng BigInteger cho user_id
+    user_id = Column(BigInteger, nullable=False, index=True)
     username = Column(String)
     message_text = Column(Text)
     ai_feedback_text = Column(Text)
@@ -30,7 +30,8 @@ class FeedbackLog(Base):
     __tablename__ = "feedback_logs"
     id = Column(Integer, primary_key=True, autoincrement=True)
     timestamp = Column(DateTime, default=datetime.datetime.now)
-    user_id = Column(Integer, nullable=False, index=True)
+    # 👇 SỬA Ở ĐÂY: Dùng BigInteger cho user_id
+    user_id = Column(BigInteger, nullable=False, index=True)
     ai_feedback_text = Column(Text)
     rating = Column(String(10))
     suggestion_id = Column(String(50), index=True)
@@ -45,30 +46,25 @@ class ContentDB(Base):
     rating_score = Column(Integer, default=0)
 
 
-# --- CLASS COLLECTOR V2.1 (Đã nâng cấp) ---
+# --- CLASS COLLECTOR V2.1 ---
 class CollectorV2:
     def __init__(self, database_url):
-        """
-        Khởi tạo kết nối tới PostgreSQL (hoặc SQLite) bằng SQLAlchemy.
-        database_url sẽ được đọc từ biến môi trường.
-        """
         self.engine = None
         self.Session = None
         try:
-            # Ví dụ database_url: "postgresql://user:pass@host:port/dbname"
-            # Hoặc "sqlite:///aimentor.db" (vẫn chạy được local nếu bạn muốn)
+            # Tự động fix lỗi URL của Render nếu cần
+            if database_url and database_url.startswith("postgres://"):
+                database_url = database_url.replace("postgres://", "postgresql://", 1)
+
             self.engine = create_engine(database_url)
-
-            # Tạo session (phiên làm việc) để tương tác với DB
             self.Session = sessionmaker(bind=self.engine)
-
             logger.info(f"Kết nối SQLAlchemy tới database thành công.")
         except Exception as e:
             logger.error(f"Lỗi kết nối SQLAlchemy: {e}", exc_info=True)
             raise e
 
     def setup_database(self):
-        """Tự động tạo tất cả các bảng (đã định nghĩa ở trên) nếu chúng chưa tồn tại."""
+        """Tự động tạo tất cả các bảng nếu chưa tồn tại."""
         try:
             Base.metadata.create_all(self.engine)
             logger.info("SQLAlchemy: Đã tạo/kiểm tra các bảng thành công.")
@@ -76,7 +72,6 @@ class CollectorV2:
             logger.error(f"Lỗi setup_database (SQLAlchemy): {e}", exc_info=True)
 
     def _get_session(self):
-        """Hàm trợ giúp nội bộ để lấy một session mới."""
         return self.Session()
 
     def log_message(self, user_id, username, message_text, ai_feedback):
@@ -118,12 +113,9 @@ class CollectorV2:
             session.close()
 
     def get_all_content(self):
-        """Thay thế get_all_records()"""
         session = self._get_session()
         try:
-            # Query tất cả record trong bảng ContentDB
             records = session.query(ContentDB).all()
-            # Chuyển list các object thành list các dict (để giống hệt output cũ)
             return [rec.__dict__ for rec in records]
         except SQLAlchemyError as e:
             logger.error(f"Lỗi get_all_content (SQLAlchemy): {e}", exc_info=True)
@@ -132,17 +124,12 @@ class CollectorV2:
             session.close()
 
     def update_suggestion_score(self, sugg_id, rating):
-        """
-        Cập nhật điểm bằng SQLAlchemy (an toàn hơn nhiều).
-        """
         session = self._get_session()
         try:
-            # Tìm chính xác record cần cập nhật
             record = session.query(ContentDB).filter_by(suggestion_id=sugg_id).first()
             if record:
                 value_change = 1 if rating == "good" else -1
                 record.rating_score = (record.rating_score or 0) + value_change
-
                 session.commit()
                 logger.info(f"Đã cập nhật điểm (thay đổi {value_change}) cho {sugg_id}")
                 return True
@@ -159,18 +146,13 @@ class CollectorV2:
     def get_inactive_users(self, days_inactive=3):
         session = self._get_session()
         try:
-            # Tính toán thời điểm 'days_inactive' ngày trước
             cutoff_time = datetime.datetime.now() - datetime.timedelta(days=days_inactive)
-
-            # Query phức tạp bằng SQLAlchemy
             users = (
                 session.query(MessageLog.user_id)
                 .group_by(MessageLog.user_id)
                 .having(func.max(MessageLog.timestamp) < cutoff_time)
                 .all()
             )
-            # 'users' là list các (tuple,), e.g., [(123,), (456,)]
-            # Chuyển đổi về list các dict (để giống output cũ)
             user_list = [{"user_id": user[0]} for user in users]
             logger.info(f"Smart Scheduler: Tìm thấy {len(user_list)} người dùng không hoạt động.")
             return user_list
