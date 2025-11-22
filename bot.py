@@ -1,8 +1,8 @@
-# FILE BOT CHÍNH (CHUẨN DAY 18 - Maintenance)
+# FILE BOT CHÍNH (CHUẨN DAY 19 - Optimized Logging & Job Locking)
 
 import sqlite3
 from db_collector import CollectorV2
-from scrapers import scrape_python_news  # (Day 17)
+from scrapers import scrape_python_news
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application, CommandHandler, MessageHandler, filters,
@@ -19,14 +19,33 @@ TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 DATABASE_URL = os.getenv("DATABASE_URL")
 
-# [DAY 18] ID Admin để nhận báo cáo (Thay bằng ID thật của bạn!)
+# Thay bằng ID Telegram thật của bạn
 ADMIN_IDS = [5929406140]
 
-# --- THIẾT LẬP LOGGING ---
+# --- [DAY 19] CẤU HÌNH LOGGING CHUẨN ---
 logging.basicConfig(
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
+    format="%(asctime)s [%(levelname)s] [%(name)s] %(message)s",
+    level=logging.INFO,
+    datefmt="%Y-%m-%d %H:%M:%S"
 )
-logger = logging.getLogger(__name__)
+# Tắt bớt log ồn ào của các thư viện bên thứ 3
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("apscheduler").setLevel(logging.WARNING)
+logging.getLogger("googleapiclient").setLevel(logging.WARNING)
+
+logger = logging.getLogger("AI_Mentor_Bot")
+
+# --- [DAY 19] BIẾN CỜ (LOCKS) ---
+# Để ngăn chặn các job chạy chồng chéo lên nhau
+job_locks = {
+    "scheduler": False,
+    "scraper": False
+}
+
+# --- KIỂM TRA BIẾN MÔI TRƯỜNG ---
+if not TELEGRAM_BOT_TOKEN or not GEMINI_API_KEY:
+    logger.error("Lỗi: Thiếu API Key trong biến môi trường.")
+    exit()
 
 # --- XỬ LÝ URL DATABASE ---
 if DATABASE_URL and DATABASE_URL.startswith("postgres://"):
@@ -37,7 +56,7 @@ try:
     db = CollectorV2(DATABASE_URL)
     db.setup_database()
     content_records = db.get_all_content()
-    logger.info(f"Đã tải {len(content_records)} gợi ý từ database.")
+    logger.info(f"Đã tải {len(content_records)} gợi ý từ cache Database.")
 except Exception as e:
     logger.error(f"LỖI KHỞI ĐỘNG DB: {e}", exc_info=True)
     exit()
@@ -51,10 +70,12 @@ try:
     )
 except Exception:
     model_v3 = None
+    logger.warning("Gemini không khởi tạo được, sẽ dùng fallback v1.0")
 
 
-# --- CÁC HÀM LOGIC (v1.0, v2.0, v3.0) ---
-# (Giữ nguyên logic cũ để file gọn hơn, chỉ thay đổi Scheduler bên dưới)
+# ==============================================================================
+# CÁC HÀM LOGIC (CORE)
+# ==============================================================================
 
 def get_suggestion_engine(message_text: str) -> tuple:
     lower_message = message_text.lower()
@@ -85,72 +106,116 @@ async def get_gemini_feedback_v3(message_text: str, history: list) -> str:
     return response.text
 
 
-# --- CÁC JOB SCHEDULER (QUAN TRỌNG DAY 18) ---
+# ==============================================================================
+# CÁC JOB SCHEDULER (NÂNG CẤP DAY 19)
+# ==============================================================================
 
-# 1. Nhắc nhở học tập (Đã tối ưu Day 18 - Không spam đêm)
+# 1. Nhắc nhở học tập (Có Locking & Check giờ)
 async def smart_scheduler_job(context: ContextTypes.DEFAULT_TYPE):
-    # Kiểm tra giờ (8h sáng -> 21h tối mới chạy)
-    current_hour = datetime.datetime.now().hour
-    if current_hour < 8 or current_hour > 21:
-        logger.info("SCHEDULER: Giờ nghỉ ngơi. Bỏ qua.")
+    if job_locks["scheduler"]:
+        logger.warning("SCHEDULER: Job trước chưa xong (Locked). Bỏ qua lần này.")
         return
 
-    logger.info("SCHEDULER: Đang chạy Job kiểm tra người dùng...")
-    inactive_users = db.get_inactive_users(days_inactive=3)
+    job_locks["scheduler"] = True
+    try:
+        # Check giờ (8h - 21h)
+        current_hour = datetime.datetime.now().hour
+        if current_hour < 8 or current_hour > 21:
+            # logger.info("SCHEDULER: Giờ nghỉ ngơi.") -> Tắt log này cho đỡ rác
+            return
 
-    if not inactive_users: return
+        logger.info("SCHEDULER: Đang quét người dùng không hoạt động...")
+        inactive_users = db.get_inactive_users(days_inactive=3)
 
-    msg = "Chào bạn, đã lâu không thấy bạn tương tác. Bạn có muốn tiếp tục học không?"
-    for user in inactive_users:
-        try:
-            await context.bot.send_message(chat_id=user['user_id'], text=msg)
-            logger.info(f"SCHEDULER: Đã nhắc nhở {user['user_id']}")
-        except:
-            pass
+        if inactive_users:
+            count = 0
+            msg = "Chào bạn, đã lâu không thấy bạn tương tác. Bạn có muốn tiếp tục học không?"
+            for user in inactive_users:
+                try:
+                    await context.bot.send_message(chat_id=user['user_id'], text=msg)
+                    count += 1
+                except:
+                    pass  # User block bot
+            logger.info(f"SCHEDULER: Đã gửi nhắc nhở cho {count} người.")
+
+    except Exception as e:
+        logger.error(f"Lỗi Scheduler: {e}")
+    finally:
+        job_locks["scheduler"] = False  # Luôn mở khóa khi xong
 
 
-# 2. Auto Feed (Scraper)
+# 2. Auto Feed Scraper (Có Locking)
 async def auto_feed_job(context: ContextTypes.DEFAULT_TYPE):
-    logger.info("JOB: Bắt đầu cào dữ liệu...")
-    items = scrape_python_news()  # Hàm từ scrapers.py
-    if items:
-        count = db.import_content_batch(items)
-        msg = f"Đã cào được {len(items)} bài, thêm mới {count} bài."
-        logger.info(msg)
-        db.log_health("Scraper", "OK", msg)
+    if job_locks["scraper"]:
+        logger.warning("SCRAPER: Job trước chưa xong (Locked). Bỏ qua.")
+        return
 
-        # Reload cache
-        global content_records
-        content_records = db.get_all_content()
-    else:
-        db.log_health("Scraper", "WARNING", "Không cào được bài nào.")
+    job_locks["scraper"] = True
+    try:
+        logger.info("SCRAPER: Bắt đầu cào dữ liệu...")
+        items = scrape_python_news()
+        if items:
+            count = db.import_content_batch(items)
+            msg = f"Đã cào được {len(items)} bài, thêm mới {count} bài."
+            logger.info(msg)
+            db.log_health("Scraper", "OK", msg)
+
+            # Reload cache ngay lập tức
+            global content_records
+            content_records = db.get_all_content()
+        else:
+            db.log_health("Scraper", "WARNING", "Không cào được bài nào.")
+
+    except Exception as e:
+        logger.error(f"Lỗi Scraper: {e}")
+        db.log_health("Scraper", "ERROR", str(e))
+    finally:
+        job_locks["scraper"] = False
 
 
 # 3. Alive Check
 async def alive_check_job(context: ContextTypes.DEFAULT_TYPE):
-    db.log_health("System", "ALIVE", "Bot đang chạy ổn định.")
+    # Chỉ log vào DB, không in ra console để tránh rác log
+    db.log_health("System", "ALIVE", "Bot Running")
 
 
-# 4. [MỚI DAY 18] Báo cáo Admin
+# 4. [NÂNG CẤP DAY 19] Báo cáo Admin chi tiết
 async def daily_report_job(context: ContextTypes.DEFAULT_TYPE):
-    logger.info("REPORT: Đang tổng hợp báo cáo...")
+    logger.info("REPORT: Đang tạo báo cáo ngày...")
     errors = db.get_recent_errors(hours=24)
+    total_content = len(content_records) if 'content_records' in globals() else 0
 
+    # Header báo cáo
+    report = f"📊 **BÁO CÁO TRẠNG THÁI HỆ THỐNG**\n"
+    report += f"📅 {datetime.datetime.now().strftime('%d/%m/%Y %H:%M')}\n\n"
+
+    # 1. Trạng thái Jobs
+    report += "**1. Trạng thái Jobs:**\n"
+    report += f"- Scheduler Lock: {'🔒' if job_locks['scheduler'] else '🟢'}\n"
+    report += f"- Scraper Lock: {'🔒' if job_locks['scraper'] else '🟢'}\n\n"
+
+    # 2. Dữ liệu
+    report += "**2. Dữ liệu:**\n"
+    report += f"- Tổng bài học: {total_content}\n\n"
+
+    # 3. Sức khỏe
     if not errors:
-        report_text = "✅ **Báo cáo ngày:** Hệ thống ổn định. Không lỗi."
+        report += "✅ **Hệ thống ổn định (100%).**"
     else:
-        report_text = f"⚠️ **CẢNH BÁO:** Có {len(errors)} lỗi trong 24h qua:\n"
+        report += f"⚠️ **Phát hiện {len(errors)} lỗi:**\n"
         for err in errors[:5]:
-            report_text += f"- [{err.get('component')}] {err.get('message')}\n"
+            report += f"- [{err.get('component')}] {err.get('message')}\n"
+        if len(errors) > 5:
+            report += f"... và {len(errors) - 5} lỗi khác."
 
     for admin_id in ADMIN_IDS:
         try:
-            await context.bot.send_message(chat_id=admin_id, text=report_text, parse_mode="Markdown")
+            await context.bot.send_message(chat_id=admin_id, text=report, parse_mode="Markdown")
         except:
             pass
 
 
-# 5. [MỚI DAY 18] Dọn dẹp Database
+# 5. Dọn dẹp
 async def maintenance_job(context: ContextTypes.DEFAULT_TYPE):
     logger.info("MAINTENANCE: Dọn dẹp log cũ...")
     count = db.clean_old_logs(days_keep=30)
@@ -163,7 +228,9 @@ async def maintenance_job(context: ContextTypes.DEFAULT_TYPE):
                 pass
 
 
-# --- HANDLERS & MAIN ---
+# ==============================================================================
+# HANDLERS & MAIN
+# ==============================================================================
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     message = update.message
@@ -171,11 +238,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     username = message.from_user.username or "Unknown"
     message_text = message.text
 
-    logger.info(f"[v3.0] Nhận: {message_text}")
+    logger.info(f"Msg from [{username}]: {message_text}")  # Log ngắn gọn hơn
     history = context.user_data.setdefault('history', [])
     history.append({"role": "user", "content": message_text})
 
-    # Logic Hybrid
     sugg_text, sugg_link, sugg_id = get_suggestion_engine(message_text)
     final_feedback = ""
     callback_type = "std"
@@ -185,23 +251,24 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         final_feedback = f"Gợi ý:\n\n💡 **{sugg_text}**\n{sugg_link}"
         callback_type = "sugg"
         callback_id = sugg_id
+        logger.info(f"-> Trả lời bằng DB (v2.0): {sugg_id}")
     else:
         try:
             final_feedback = await get_gemini_feedback_v3(message_text, history[-10:])
+            logger.info("-> Trả lời bằng Gemini (v3.0)")
         except Exception as e:
             logger.error(f"Gemini Error: {e}")
             final_feedback = get_ai_feedback_v1_0(message_text)
+            logger.info("-> Trả lời bằng Fallback (v1.0)")
 
     history.append({"role": "ai", "content": final_feedback})
     context.user_data['history'] = history[-20:]
 
-    # Ghi log
     try:
         db.log_message(user_id, username, message_text, final_feedback)
     except Exception as e:
-        logger.error(f"DB Error: {e}")
+        logger.error(f"DB Log Error: {e}")
 
-    # Gửi tin
     keyboard = [[
         InlineKeyboardButton("👍 Hữu ích", callback_data=f"fb_{callback_type}_{callback_id}_good"),
         InlineKeyboardButton("👎 Không hữu ích", callback_data=f"fb_{callback_type}_{callback_id}_bad"),
@@ -240,27 +307,25 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 def main():
-    logger.info("Khởi động Bot v3.1 (Day 18)...")
+    logger.info("--- KHỞI ĐỘNG AI MENTOR BOT v3.1 (Day 19) ---")
     application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
 
-    # --- ĐĂNG KÝ JOBS ---
     jq = application.job_queue
-    # 1. Nhắc nhở: Mỗi 24h (86400s)
+    # Job Scheduler (Giây)
     jq.run_repeating(smart_scheduler_job, interval=86400, first=10)
-    # 2. Alive Check: Mỗi 1h (3600s)
     jq.run_repeating(alive_check_job, interval=3600, first=20)
-    # 3. Auto Feed: Mỗi 6h (21600s)
     jq.run_repeating(auto_feed_job, interval=21600, first=30)
-    # 4. [DAY 18] Báo cáo Admin: Mỗi 24h (86400s)
     jq.run_repeating(daily_report_job, interval=86400, first=60)
-    # 5. [DAY 18] Dọn dẹp: Mỗi tuần (604800s)
     jq.run_repeating(maintenance_job, interval=604800, first=120)
 
-    # Handlers
     application.add_handler(CommandHandler("start", start_command))
     application.add_handler(CallbackQueryHandler(button_click, pattern="^fb_"))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    application.add_handler(
+        MessageHandler(filters.Sticker.ALL | filters.PHOTO, lambda u, c: u.message.reply_text("Chỉ nhận text!")))
+    application.add_handler(MessageHandler(filters.COMMAND, lambda u, c: u.message.reply_text("Lệnh không tồn tại.")))
 
+    logger.info("Bot đang chạy... Nhấn Ctrl+C để dừng.")
     application.run_polling()
 
 
