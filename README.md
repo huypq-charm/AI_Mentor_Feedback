@@ -32,6 +32,42 @@ Hệ thống được xây dựng theo kiến trúc "Hybrid", ưu tiên nội du
 
 ---
 
+## 📊 Luồng Hoạt động (Data Flow)
+
+Hệ thống v3.0 (Hybrid) này hoạt động theo 3 luồng chính:
+
+### Luồng 1: Xử lý Tin nhắn Mới (Hybrid Logic)
+
+Đây là luồng "ưu tiên" khi bot nhận được tin nhắn:
+
+1.  **User** gửi tin nhắn (ví dụ: "lỗi python").
+2.  **Bot Service** (Render) nhận tin nhắn.
+3.  **[Ưu tiên 1]** Bot tìm trong **PostgreSQL** (bảng `content_db`).
+    * **Nếu tìm thấy:** Bot gửi gợi ý (link/text) từ DB. (Nhanh, Rẻ, Đã kiểm duyệt).
+    * **Nếu không tìm thấy:** Chuyển sang Ưu tiên 2.
+4.  **[Ưu tiên 2]** Bot gọi API của **Google Gemini** (v3.0).
+    * **Nếu thành công:** Bot gửi câu trả lời thông minh từ Gemini.
+    * **Nếu Gemini lỗi (429, 404...):** Chuyển sang Ưu tiên 3.
+5.  **[Ưu tiên 3]** Bot dùng logic `if-else` (v1.0) cũ làm dự phòng (fallback).
+6.  Cuối cùng, bot ghi log tin nhắn vào `message_logs` (PostgreSQL) và gửi câu trả lời (kèm nút 👍/👎) cho User.
+
+### Luồng 2: Xử lý Feedback (Vòng lặp Học)
+
+1.  **User** nhấn nút "👍 Hữu ích" (hoặc "👎").
+2.  **Bot Service** nhận "CallbackQuery".
+3.  Bot ghi log (ví dụ: "good", "Sugg_002") vào bảng `feedback_logs` (PostgreSQL).
+4.  **Nếu** feedback này là cho một gợi ý (`sugg_id` tồn tại), bot sẽ `UPDATE` bảng `content_db` để cộng/trừ `rating_score` của gợi ý đó.
+5.  Bot sửa tin nhắn, xóa nút bấm.
+
+### Luồng 3: Lập lịch (Scheduler)
+
+1.  **Job Queue** (Render) tự động kích hoạt hàm `smart_scheduler_job` mỗi 24 giờ.
+2.  Bot query (truy vấn) **PostgreSQL** (bảng `message_logs`) để tìm các `user_id` không hoạt động (ví dụ: 3 ngày).
+3.  Bot gửi tin nhắn nhắc nhở cho những user đó.
+
+
+---
+
 ## 🐳 Cách chạy Dự án (Local)
 
 Dự án này được thiết kế để chạy với Docker Compose.
@@ -46,14 +82,14 @@ Dự án này đọc tất cả các "bí mật" (API Keys) từ file `.env`. H�
 
 ```ini
 # Lấy từ @BotFather trên Telegram
-TELEGRAM_BOT_TOKEN=TOKEN_TELEGRAM_CUA_BAN
+TELEGRAM_BOT_TOKEN=8541077394:AAEfHsSIBRwa8eYsHS21IStnjwhxsmsfzwk
 
 # Lấy từ Google AI Studio ([https://aistudio.google.com/](https://aistudio.google.com/))
-GEMINI_API_KEY=KEY_GEMINI_CUA_BAN
+GEMINI_API_KEY=AIzaSyB19NjJjlHZm8kQWzM4VC1nKLFe9IxZHqU
 
 # Dùng "Internal Database URL" nếu deploy trên Render
 # Dùng "External Database URL" nếu chạy script migrate
-DATABASE_URL=postgres://user:pass@host/dbname
+DATABASE_URL=postgresql://aimentor_db_user:NinCDZ7ZQGlxELhs5NHpNrDzzF86uY69@dpg-d4c1s9ili9vc73bnhf9g-a/aimentor_db
 ```
 
 **3. Khởi chạy Dịch vụ:**
@@ -97,5 +133,5 @@ Dự án này được tối ưu để chạy trên Gói Miễn phí của Rende
         * `TELEGRAM_BOT_TOKEN`
         * `GEMINI_API_KEY`
         * `DATABASE_URL` (Dán giá trị "Internal Database URL" đã copy ở Bước 1).
-    * **Start Command:** `python bot.py`
+    * **Start Command:** Để trống (sẽ tự động dùng `CMD` từ `Dockerfile`).
     * Nhấn "Deploy".
