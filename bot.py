@@ -1,5 +1,5 @@
 # FILE BOT CHÍNH (CHUẨN DAY 13 - v3.0 Hybrid - Tích hợp GEMINI)
-
+from scrapers import scrape_python_news # <-- File mới tạo
 import sqlite3
 from db_collector import CollectorV2
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
@@ -90,7 +90,29 @@ def get_suggestion_engine(message_text: str) -> tuple:
         best_suggestion.get('Suggestion_Link'),
         best_suggestion.get('Suggestion_ID')
     )
+# --- JOB 1: AUTO FEED (Cào dữ liệu) ---
+async def auto_feed_job(context: ContextTypes.DEFAULT_TYPE):
+    logger.info("JOB: Bắt đầu cào dữ liệu tự động...")
 
+    # 1. Chạy scraper
+    items = scrape_python_news()
+
+    if items:
+        # 2. Lưu vào DB (có check trùng)
+        count = db.import_content_batch(items)
+        msg = f"Đã cào được {len(items)} bài, thêm mới {count} bài."
+        logger.info(msg)
+
+        # 3. Ghi log sức khỏe
+        db.log_health("Scraper", "OK", msg)
+    else:
+        db.log_health("Scraper", "WARNING", "Không cào được bài nào.")
+
+# --- JOB 2: ALIVE CHECK (Kiểm tra sức sống) ---
+async def alive_check_job(context: ContextTypes.DEFAULT_TYPE):
+    # Chỉ đơn giản là ghi vào DB để biết bot còn chạy
+    db.log_health("System", "ALIVE", "Bot đang chạy ổn định.")
+    logger.info("JOB: Alive check logged.")
 
 # --- BỘ NÃO v1.0 (Day 04 - Giữ lại làm Fallback) ---
 def get_ai_feedback_v1_0(message_text: str) -> str:
@@ -265,7 +287,19 @@ async def unknown_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 def main():
     logger.info("Đang khởi động bot (v3.0 - Hybrid)...")
     application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
+    # --- SCHEDULERS ---
     job_queue = application.job_queue
+
+    # 1. Nhắc nhở học tập (Cũ) - Chạy mỗi 24h
+    job_queue.run_repeating(smart_scheduler_job, interval=86400, first=10)
+
+    # 2. Alive Check (Mới) - Chạy mỗi 1 giờ (3600s)
+    job_queue.run_repeating(alive_check_job, interval=3600, first=20)
+
+    # 3. Auto Feed Scraper (Mới) - Chạy mỗi 6 giờ (21600s)
+    job_queue.run_repeating(auto_feed_job, interval=21600, first=30)
+
+    logger.info("Đã kích hoạt tất cả Scheduler (Reminder, Alive, Scraper).")
     job_queue.run_repeating(smart_scheduler_job, interval=86400, first=10)
     logger.info("Đã kích hoạt Smart Scheduler (chạy mỗi 24h, bắt đầu sau 10s).")
     application.add_handler(CommandHandler("start", start_command))

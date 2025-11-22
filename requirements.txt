@@ -4,3 +4,5 @@ google-generativeai
 httpx # (Đã có từ Day 13 trước)
 SQLAlchemy
 psycopg2-binary
+requests
+beautifulsoup4

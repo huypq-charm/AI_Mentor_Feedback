@@ -123,6 +123,60 @@ class CollectorV2:
         finally:
             session.close()
 
+        # ... (Các hàm cũ giữ nguyên) ...
+
+        # --- HÀM MỚI DAY 17 ---
+        def log_health(self, component, status, message):
+            """Ghi log sức khỏe hệ thống"""
+            session = self._get_session()
+            try:
+                health_log = SystemHealth(
+                    component=component,
+                    status=status,
+                    message=message
+                )
+                session.add(health_log)
+                session.commit()
+            except Exception as e:
+                logger.error(f"Lỗi log_health: {e}")  # Không raise e để tránh sập bot
+            finally:
+                session.close()
+
+        def import_content_batch(self, items):
+            """
+            Lưu hàng loạt nội dung mới (Có kiểm tra trùng lặp).
+            items = list các dict [{'keyword':..., 'text':..., 'link':...}]
+            """
+            session = self._get_session()
+            count_new = 0
+            try:
+                for item in items:
+                    # 1. Anti-duplicate Check: Kiểm tra xem Link đã tồn tại chưa
+                    exists = session.query(ContentDB).filter_by(suggestion_link=item['link']).first()
+
+                    if not exists:
+                        # Tạo ID mới (ví dụ: AUTO_timestamp)
+                        new_id = f"AUTO_{int(datetime.datetime.now().timestamp())}_{count_new}"
+
+                        new_content = ContentDB(
+                            suggestion_id=new_id,
+                            keyword=item['keyword'],
+                            suggestion_text=item['text'],
+                            suggestion_link=item['link'],
+                            rating_score=0  # Điểm mặc định
+                        )
+                        session.add(new_content)
+                        count_new += 1
+
+                session.commit()
+                return count_new
+            except Exception as e:
+                logger.error(f"Lỗi import_content_batch: {e}")
+                session.rollback()
+                return 0
+            finally:
+                session.close()
+
     def update_suggestion_score(self, sugg_id, rating):
         session = self._get_session()
         try:
@@ -161,3 +215,10 @@ class CollectorV2:
             return []
         finally:
             session.close()
+class SystemHealth(Base):
+    __tablename__ = "system_health"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    timestamp = Column(DateTime, default=datetime.datetime.now)
+    component = Column(String(50)) # Ví dụ: "Scheduler", "Scraper", "Bot"
+    status = Column(String(20))    # "OK", "ERROR"
+    message = Column(Text)
